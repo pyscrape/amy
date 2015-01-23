@@ -34,6 +34,7 @@ test :
 migrations :
 	python manage.py makemigrations
 	python manage.py migrate
+	${QUERY} .schema > schema.sql
 
 ## import       : import and save legacy data
 import :
@@ -55,9 +56,10 @@ serve :
 
 ## clean        : clean up.
 clean :
-	rm -f \
+	rm -rf \
 	$$(find . -name '*~' -print) \
 	$$(find . -name '*.pyc' -print) \
+	htmlerror \
 	${APP_DB}
 
 ## members      : who qualifies as a SCF member?

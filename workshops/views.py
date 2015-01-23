@@ -9,31 +9,73 @@ from django.core.urlresolvers import reverse
 from django.core.exceptions import ObjectDoesNotExist
 from django.http import Http404
 from django.db import IntegrityError, transaction
-from django.db.models import Count, Q
+from django.db.models import Count, Q, Model
 from django.shortcuts import redirect, render, get_object_or_404
+from django.views.generic.base import ContextMixin
 from django.views.generic.edit import CreateView, UpdateView
-
-from workshops.models import Site, Airport, Event, Person, Task, Cohort, Skill, Trainee, Badge, Award, Role
-from workshops.forms import SearchForm, InstructorsForm, PersonBulkAddForm
-from workshops.util import earth_distance, upload_person_task_csv
 
 from workshops.models import \
     Airport, \
     Award, \
     Badge, \
-    Cohort, \
     Event, \
     Person, \
+    Role, \
     Site, \
     Skill, \
-    Task, \
-    Trainee
+    Task
+from workshops.check import check_file
+from workshops.forms import SearchForm, InstructorsForm, PersonBulkAddForm
+from workshops.util import earth_distance, upload_person_task_csv
 
 #------------------------------------------------------------
 
 ITEMS_PER_PAGE = 25
 
 #------------------------------------------------------------
+
+
+class CreateViewContext(CreateView):
+    """
+    Class-based view for creating objects that extends default template context
+    by adding model class used in objects creation.
+    """
+
+    def get_context_data(self, **kwargs):
+        context = super(CreateViewContext, self).get_context_data(**kwargs)
+
+        # self.model is available in CreateView as the model class being
+        # used to create new model instance
+        context['model'] = self.model
+
+        if self.model and issubclass(self.model, Model):
+            context['title'] = 'New {}'.format(self.model._meta.verbose_name)
+        else:
+            context['title'] = 'New object'
+
+        return context
+
+
+class UpdateViewContext(UpdateView):
+    """
+    Class-based view for updating objects that extends default template context
+    by adding proper page title.
+    """
+
+    def get_context_data(self, **kwargs):
+        context = super(UpdateViewContext, self).get_context_data(**kwargs)
+
+        # self.model is available in UpdateView as the model class being
+        # used to update model instance
+        context['model'] = self.model
+
+        # self.object is available in UpdateView as the object being currently
+        # edited
+        context['title'] = str(self.object)
+        return context
+
+#------------------------------------------------------------
+
 
 def index(request):
     '''Home page.'''
@@ -71,12 +113,12 @@ def site_details(request, site_domain):
     return render(request, 'workshops/site.html', context)
 
 
-class SiteCreate(CreateView):
+class SiteCreate(CreateViewContext):
     model = Site
     fields = SITE_FIELDS
 
 
-class SiteUpdate(UpdateView):
+class SiteUpdate(UpdateViewContext):
     model = Site
     fields = SITE_FIELDS
     slug_field = 'domain'
@@ -105,12 +147,12 @@ def airport_details(request, airport_iata):
     return render(request, 'workshops/airport.html', context)
 
 
-class AirportCreate(CreateView):
+class AirportCreate(CreateViewContext):
     model = Airport
     fields = AIRPORT_FIELDS
 
 
-class AirportUpdate(UpdateView):
+class AirportUpdate(UpdateViewContext):
     model = Airport
     fields = AIRPORT_FIELDS
     slug_field = 'iata'
@@ -154,9 +196,7 @@ def person_bulk_add(request):
                 # instead of insta-saving, put everything into session
                 # then redirect to confirmation page which in turn saves the
                 # data
-
                 request.session['bulk-add-people'] = persons_tasks
-
                 return redirect('person_bulk_add_confirmation')
 
     else:
@@ -326,12 +366,12 @@ def _verify_upload_person_task(data):
     return errors_occur
 
 
-class PersonCreate(CreateView):
+class PersonCreate(CreateViewContext):
     model = Person
     fields = '__all__'
 
 
-class PersonUpdate(UpdateView):
+class PersonUpdate(UpdateViewContext):
     model = Person
     fields = '__all__'
     pk_url_kwarg = 'person_id'
@@ -342,7 +382,7 @@ class PersonUpdate(UpdateView):
 def all_events(request):
     '''List all events.'''
 
-    all_events = Event.objects.order_by('id')
+    all_events = Event.objects.all()
     events = _get_pagination_items(request, all_events)
     for e in events:
         e.num_instructors = e.task_set.filter(role__name='instructor').count()
@@ -382,12 +422,12 @@ def validate_event(request, event_ident):
     return render(request, 'workshops/validate_event.html', context)
 
 
-class EventCreate(CreateView):
+class EventCreate(CreateViewContext):
     model = Event
     fields = '__all__'
 
 
-class EventUpdate(UpdateView):
+class EventUpdate(UpdateViewContext):
     model = Event
     fields = '__all__'
     pk_url_kwarg = 'event_ident'
@@ -409,70 +449,24 @@ def all_tasks(request):
     return render(request, 'workshops/all_tasks.html', context)
 
 
-def task_details(request, event_slug, person_id, role_name):
+def task_details(request, task_id):
     '''List details of a particular task.'''
-    task = Task.objects.get(event__slug=event_slug, person__id=person_id, role__name=role_name)
+    task = Task.objects.get(pk=task_id)
     context = {'title' : 'Task {0}'.format(task),
                'task' : task}
     return render(request, 'workshops/task.html', context)
 
 
-class TaskCreate(CreateView):
+class TaskCreate(CreateViewContext):
     model = Task
     fields = TASK_FIELDS
 
 
-class TaskUpdate(UpdateView):
+class TaskUpdate(UpdateViewContext):
     model = Task
     fields = TASK_FIELDS
     pk_url_kwarg = 'task_id'
 
-    def get_object(self):
-        """
-        Returns the object the view is displaying.
-        """
-
-        event_slug = self.kwargs.get('event_slug', None)
-        person_id = self.kwargs.get('person_id', None)
-        role_name = self.kwargs.get('role_name', None)
-
-        return get_object_or_404(Task, event__slug=event_slug, person__id=person_id, role__name=role_name)
-
-#------------------------------------------------------------
-
-COHORT_FIELDS = ['name', 'start', 'active', 'venue', 'qualifies']
-
-
-def all_cohorts(request):
-    '''List all cohorts.'''
-    all_cohorts = Cohort.objects.order_by('start')
-    user_can_add = request.user.has_perm('edit')
-    context = {'title' : 'All Cohorts',
-               'all_cohorts' : all_cohorts,
-               'user_can_add' : user_can_add}
-    return render(request, 'workshops/all_cohorts.html', context)
-
-
-def cohort_details(request, cohort_name):
-    '''List details of a particular cohort.'''
-    cohort = Cohort.objects.get(name=cohort_name)
-    trainees = Trainee.objects.filter(cohort_id=cohort.id)
-    context = {'title' : 'Cohort {0}'.format(cohort),
-               'cohort' : cohort,
-               'trainees' : trainees}
-    return render(request, 'workshops/cohort.html', context)
-
-
-class CohortCreate(CreateView):
-    model = Cohort
-    fields = COHORT_FIELDS
-
-
-class CohortUpdate(UpdateView):
-    model = Cohort
-    fields = COHORT_FIELDS
-    slug_field = 'name'
-    slug_url_kwarg = 'cohort_name'
 
 #------------------------------------------------------------
 
@@ -511,16 +505,14 @@ def instructors(request):
 
             # Filter by skills.
             persons = Person.objects.filter(airport__isnull=False)
-            skills = []
             for s in Skill.objects.all():
                 if form.cleaned_data[s.name]:
-                    skills.append(s)
-            persons = persons.have_skills(skills)
+                    persons = persons.filter(qualification__skill=s)
 
             # Add metadata which we will eventually filter by
-            for person in persons:
-                person.num_taught = \
-                    person.task_set.filter(role__name='instructor').count()
+            for p in persons:
+                p.num_taught = \
+                    p.task_set.filter(role__name='instructor').count()
 
             # Sort by location.
             loc = (form.cleaned_data['latitude'],
@@ -533,7 +525,10 @@ def instructors(request):
                     distance_person[1].family,
                     distance_person[1].personal,
                     distance_person[1].middle))
-            persons = [x[1] for x in persons[:10]]
+
+            # Return number desired.
+            wanted = form.cleaned_data['wanted']
+            persons = [x[1] for x in persons[:wanted]]
 
     # if a GET (or any other method) we'll create a blank form
     else:

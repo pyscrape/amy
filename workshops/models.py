@@ -41,39 +41,12 @@ class Airport(models.Model):
     longitude = models.FloatField()
 
     def __str__(self):
-        return self.iata
+        return '{0}: {1}'.format(self.iata, self.fullname)
 
     def get_absolute_url(self):
         return reverse('airport_details', args=[str(self.iata)])
 
 #------------------------------------------------------------
-
-# Define custom queries on the QuerySet and the Manager
-class PersonQuerySet(models.query.QuerySet):
-    '''Handles finding past, ongoing and upcoming events'''
-
-    def have_skills(self, skills):
-        '''Returns persons who have all the skills listed
-        in skills, which must be a list of Skill objects.
-        '''
-
-        for s in skills:
-            self = self.filter(qualification__skill=s)
-
-        return self
-
-class PersonManager(models.Manager):
-    '''A custom manager which is essentially a proxy for PersonQuerySet'''
-
-    # Attach our custom query set to the manager
-    def get_queryset(self):
-        return PersonQuerySet(self.model, using=self._db)
-
-    # Proxy methods so we can call our custom filters from the manager
-    # without explicitly creating an PersonQuerySet first
-
-    def have_skills(self, skills):
-        return self.get_queryset().have_skills(skills)
 
 class Person(models.Model):
     '''Represent a single person.'''
@@ -86,21 +59,17 @@ class Person(models.Model):
         (OTHER, 'Other'),
         )
 
-    personal   = models.CharField(max_length=STR_LONG)
-    middle     = models.CharField(max_length=STR_LONG, null=True)
-    family     = models.CharField(max_length=STR_LONG)
-    email      = models.CharField(max_length=STR_LONG, unique=True, null=True)
-    gender     = models.CharField(max_length=1, choices=GENDER_CHOICES, null=True, blank=True)
-    active     = models.NullBooleanField(
-        help_text='Are we currently allowed to contact this person?')
-    airport    = models.ForeignKey(Airport, null=True)
-    github     = models.CharField(max_length=STR_MED, unique=True, null=True)
-    twitter    = models.CharField(max_length=STR_MED, unique=True, null=True)
-    url        = models.CharField(max_length=STR_LONG, null=True)
-    slug       = models.CharField(max_length=STR_LONG, null=True)
-
-    # Set the custom manager
-    objects = PersonManager()
+    personal    = models.CharField(max_length=STR_LONG)
+    middle      = models.CharField(max_length=STR_LONG, null=True, blank=True)
+    family      = models.CharField(max_length=STR_LONG)
+    email       = models.CharField(max_length=STR_LONG, unique=True, null=True, blank=True)
+    gender      = models.CharField(max_length=1, choices=GENDER_CHOICES, null=True, blank=True)
+    may_contact = models.BooleanField(default=True)
+    airport     = models.ForeignKey(Airport, null=True, blank=True)
+    github      = models.CharField(max_length=STR_MED, unique=True, null=True, blank=True)
+    twitter     = models.CharField(max_length=STR_MED, unique=True, null=True, blank=True)
+    url         = models.CharField(max_length=STR_LONG, null=True, blank=True)
+    slug        = models.CharField(max_length=STR_LONG, null=True, blank=True)
 
     def fullname(self):
         middle = ''
@@ -119,15 +88,14 @@ class Person(models.Model):
 
 #------------------------------------------------------------
 
-class Project(models.Model):
-    '''Keep track of the kinds of project we support.'''
+class Tag(models.Model):
+    '''Label for grouping events.'''
 
-    slug       = models.CharField(max_length=STR_SHORT, unique=True)
     name       = models.CharField(max_length=STR_MED, unique=True)
     details    = models.CharField(max_length=STR_LONG)
 
     def __str__(self):
-        return self.slug
+        return self.name
 
 #------------------------------------------------------------
 
@@ -215,7 +183,7 @@ class Event(models.Model):
 
     published  = models.BooleanField(default=False)
     site       = models.ForeignKey(Site)
-    project    = models.ForeignKey(Project)
+    tags       = models.ManyToManyField(Tag)
     organizer  = models.ForeignKey(Site, related_name='organizer', null=True, blank=True)
     start      = models.DateField(null=True, blank=True)
     end        = models.DateField(null=True, blank=True)
@@ -225,6 +193,9 @@ class Event(models.Model):
     attendance = models.IntegerField(null=True, blank=True)
     admin_fee  = models.DecimalField(max_digits=6, decimal_places=2, null=True, blank=True)
     notes      = models.TextField(default="", blank=True)
+
+    class Meta:
+        ordering = ('-start', )
 
     # Set the custom manager
     objects = EventManager()
@@ -283,48 +254,7 @@ class Task(models.Model):
         return '{0}/{1}={2}'.format(self.event, self.person, self.role)
 
     def get_absolute_url(self):
-        return reverse('task_details', kwargs={'event_slug':str(self.event),
-                                               'person_id':self.person.pk,
-                                               'role_name':str(self.role)})
-
-#------------------------------------------------------------
-
-class Cohort(models.Model):
-    '''Represent a training cohort.'''
-
-    start      = models.DateField()
-    name       = models.CharField(max_length=STR_MED)
-    active     = models.BooleanField(default=True)
-    venue      = models.ForeignKey(Site, null=True) # null for online
-    qualifies  = models.BooleanField(default=True)
-
-    def __str__(self):
-        return self.name
-
-    def get_absolute_url(self):
-        return reverse('cohort_details', args=[str(self.name)])
-
-#------------------------------------------------------------
-
-class TraineeStatus(models.Model):
-    '''Enumerate states that a trainee can be in.'''
-
-    name       = models.CharField(max_length=STR_MED)
-
-    def __str__(self):
-        return self.name
-
-#------------------------------------------------------------
-
-class Trainee(models.Model):
-    '''Represent someone taking the instructor training course.'''
-
-    person     = models.ForeignKey(Person)
-    cohort     = models.ForeignKey(Cohort)
-    status     = models.ForeignKey(TraineeStatus)
-
-    def __str__(self):
-        return '{0}/{1}: {2}'.format(self.person, self.cohort, self.status.name)
+        return reverse('task_details', kwargs={'task_id': self.id})
 
 #------------------------------------------------------------
 
@@ -367,6 +297,7 @@ class Award(models.Model):
     person     = models.ForeignKey(Person)
     badge      = models.ForeignKey(Badge)
     awarded    = models.DateField()
+    event      = models.ForeignKey(Event, null=True, blank=True)
 
     def __str__(self):
-        return '{0}/{1}/{2}'.format(self.person, self.badge, self.awarded)
+        return '{0}/{1}/{2}/{3}'.format(self.person, self.badge, self.awarded, self.event)
